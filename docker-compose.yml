@@ -1,6 +1,9 @@
 services:
   plex-playlist-sync:
-    build: .
+    image: ghcr.io/mayberts/plex-playlist-sync:latest
+    # To build locally instead of pulling the published image, comment out
+    # the `image:` line above and uncomment the next line:
+    # build: .
     container_name: plex-playlist-sync
     restart: unless-stopped
     env_file:

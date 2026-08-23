@@ -65,9 +65,23 @@ SYNC_INTERVAL_HOURS=24
 
 ## 4. Run it
 
+The image is published to GitHub Container Registry on every push to `main`,
+so you can just pull and run it — no build step needed on the target host:
+
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
+
+If you'd rather build locally (e.g. after editing `sync_playlist.py`),
+comment out the `image:` line in `docker-compose.yml`, uncomment `build: .`,
+and run `docker compose up -d --build` instead.
+
+> **Note:** if the GHCR package is private, `docker compose pull` will fail
+> with an authentication error. Either make the package public (Package
+> settings → Change visibility, on the package page under your GitHub
+> profile), or run `docker login ghcr.io -u <your-username>` on the Unraid
+> host first, using a [personal access token](https://github.com/settings/tokens)
+> with `read:packages` scope as the password.
 
 Check it's working:
 
