@@ -1,8 +1,8 @@
 # plex-playlist-sync
 
-Keeps a copy of **"Kate's favourites"** in sync for your Home user **Kate**,
-re-syncing once a day. Runs as a small Docker sidecar next to your Plex
-server — it does not modify Plex itself.
+Keeps a copy of one or more playlists (e.g. **"Kate's favourites"**) in sync
+for one or more Plex Home users, re-syncing once a day. Runs as a small
+Docker sidecar next to your Plex server — it does not modify Plex itself.
 
 ## Why this exists
 
@@ -54,20 +54,39 @@ Edit `.env`:
 ```
 PLEX_URL=http://192.168.1.50:32400
 PLEX_TOKEN=<paste your token here>
-PLAYLIST_NAME=Kate's favourites
+PLAYLIST_NAMES=Kate's favourites
 TARGET_USERS=Kate
 SYNC_INTERVAL_HOURS=24
 ```
 
-- `TARGET_USERS` accepts a comma-separated list if you later want to sync to
-  more than one Home user, e.g. `Kate,Alex`.
-- `PLAYLIST_NAME` must match the playlist title exactly (case-sensitive).
+- `PLAYLIST_NAMES` accepts a comma-separated list, e.g.
+  `Kate's favourites,Road trip mix`. Each name must match its playlist title
+  exactly (case-sensitive).
+- `TARGET_USERS` accepts a comma-separated list if you want to sync to more
+  than one Home user, e.g. `Kate,Alex`.
+- Every playlist in `PLAYLIST_NAMES` is synced to every user in
+  `TARGET_USERS` — there's no way to send different playlists to different
+  users from a single container (see "Adjusting later" below for that case).
 
 ## 4. Run it
 
+The image is published to GitHub Container Registry on every push to `main`,
+so you can just pull and run it — no build step needed on the target host:
+
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
+
+If you'd rather build locally (e.g. after editing `sync_playlist.py`),
+comment out the `image:` line in `docker-compose.yml`, uncomment `build: .`,
+and run `docker compose up -d --build` instead.
+
+> **Note:** if the GHCR package is private, `docker compose pull` will fail
+> with an authentication error. Either make the package public (Package
+> settings → Change visibility, on the package page under your GitHub
+> profile), or run `docker login ghcr.io -u <your-username>` on the Unraid
+> host first, using a [personal access token](https://github.com/settings/tokens)
+> with `read:packages` scope as the password.
 
 Check it's working:
 
@@ -82,6 +101,9 @@ Starting playlist sync: "Kate's favourites" -> Kate, every 24.0 hour(s).
 ...
 Synced "Kate's favourites" to Kate (12 item(s)).
 ```
+
+With multiple playlists and/or users configured, each playlist is synced to
+each user in turn within the same run.
 
 The container then sleeps and re-runs the sync every `SYNC_INTERVAL_HOURS`
 (daily, by default), for as long as it's running — `restart: unless-stopped`
@@ -100,12 +122,16 @@ means it comes back automatically after a host reboot too.
 
 ## Adjusting later
 
-- Change `SYNC_INTERVAL_HOURS` or `TARGET_USERS` in `.env`, then:
+- Change `SYNC_INTERVAL_HOURS`, `PLAYLIST_NAMES`, or `TARGET_USERS` in
+  `.env`, then:
   ```bash
   docker compose up -d
   ```
   (no rebuild needed — it's just an environment variable change, Compose
   will recreate the container.)
-- To sync a different or additional playlist, either change `PLAYLIST_NAME`
-  or duplicate this whole folder under a new name/container for a second
-  playlist.
+- To add a playlist, append it to the comma-separated `PLAYLIST_NAMES` list.
+- If you need different playlists going to different sets of users, run a
+  second copy of this container: duplicate the project (or just add a
+  second `service:` block in `docker-compose.yml`, pointing to a second
+  `.env` file) with its own `PLAYLIST_NAMES`/`TARGET_USERS` and a different
+  `container_name`.

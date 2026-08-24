@@ -2,8 +2,8 @@
 """
 plex-playlist-sync
 -------------------
-Keeps a copy of one playlist owned by the Plex server admin in sync with one
-or more Plex Home / managed users on the same server.
+Keeps a copy of one or more playlists owned by the Plex server admin in sync
+with one or more Plex Home / managed users on the same server.
 
 Plex has no native "live sync" for playlists across Home users — the built-in
 Share option on a playlist only hands out a one-time, read-only snapshot that
@@ -14,9 +14,11 @@ current contents of the source playlist.
 Configuration is via environment variables (see .env.example):
   PLEX_URL             e.g. http://192.168.1.50:32400
   PLEX_TOKEN            admin/owner X-Plex-Token (required to switch users)
-  PLAYLIST_NAME         exact, case-sensitive title of the source playlist
+  PLAYLIST_NAMES        comma-separated, exact, case-sensitive playlist titles
   TARGET_USERS          comma-separated Plex Home usernames, e.g. "Kate"
   SYNC_INTERVAL_HOURS   how often to re-sync (default 24)
+
+Every playlist in PLAYLIST_NAMES is synced to every user in TARGET_USERS.
 
 Notes / limitations:
   * Smart playlists (rule-based, not a fixed item list) are skipped — there's
@@ -47,7 +49,7 @@ log = logging.getLogger("playlist-sync")
 def get_config():
     url = os.environ.get("PLEX_URL")
     token = os.environ.get("PLEX_TOKEN")
-    playlist_name = os.environ.get("PLAYLIST_NAME")
+    playlist_names_raw = os.environ.get("PLAYLIST_NAMES", "")
     target_users_raw = os.environ.get("TARGET_USERS", "")
     interval_hours = float(os.environ.get("SYNC_INTERVAL_HOURS", "24"))
 
@@ -56,7 +58,6 @@ def get_config():
         for name, value in [
             ("PLEX_URL", url),
             ("PLEX_TOKEN", token),
-            ("PLAYLIST_NAME", playlist_name),
         ]
         if not value
     ]
@@ -64,12 +65,17 @@ def get_config():
         log.error("Missing required environment variable(s): %s", ", ".join(missing))
         sys.exit(1)
 
+    playlist_names = [p.strip() for p in playlist_names_raw.split(",") if p.strip()]
+    if not playlist_names:
+        log.error("PLAYLIST_NAMES is empty — set at least one playlist title.")
+        sys.exit(1)
+
     target_users = [u.strip() for u in target_users_raw.split(",") if u.strip()]
     if not target_users:
         log.error("TARGET_USERS is empty — set at least one Plex Home username.")
         sys.exit(1)
 
-    return url, token, playlist_name, target_users, interval_hours
+    return url, token, playlist_names, target_users, interval_hours
 
 
 def sync_once(url: str, token: str, playlist_name: str, target_users: list[str]) -> None:
@@ -127,20 +133,21 @@ def sync_once(url: str, token: str, playlist_name: str, target_users: list[str])
 
 
 def main() -> None:
-    url, token, playlist_name, target_users, interval_hours = get_config()
+    url, token, playlist_names, target_users, interval_hours = get_config()
     log.info(
-        "Starting playlist sync: %r -> %s, every %s hour(s).",
-        playlist_name,
+        "Starting playlist sync: %s -> %s, every %s hour(s).",
+        ", ".join(repr(p) for p in playlist_names),
         ", ".join(target_users),
         interval_hours,
     )
 
     while True:
         start = datetime.now(timezone.utc)
-        try:
-            sync_once(url, token, playlist_name, target_users)
-        except Exception:  # noqa: BLE001 - never let one bad run kill the container
-            log.exception("Unexpected error during sync run.")
+        for playlist_name in playlist_names:
+            try:
+                sync_once(url, token, playlist_name, target_users)
+            except Exception:  # noqa: BLE001 - never let one bad run kill the container
+                log.exception("Unexpected error syncing %r.", playlist_name)
         log.info(
             "Run finished (started %s). Sleeping %s hour(s) until the next sync.",
             start.isoformat(timespec="seconds"),
