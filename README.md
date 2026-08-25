@@ -10,11 +10,17 @@ Plex's built-in "Share" on a playlist only hands out a one-time, read-only
 snapshot — if you add or remove items later, people you shared with never
 see the update, and it doesn't reliably show up in Plexamp. There's no
 native toggle to keep a playlist "live" across Home users. This script
-closes that gap by periodically deleting each target user's copy and
-recreating it from your current playlist.
+closes that gap by periodically diffing each target user's copy against
+your current playlist and adding/removing only what changed — the playlist
+itself is never deleted and recreated, so it keeps the same identity across
+syncs (the first sync for a new user does create it from scratch, since
+there's nothing yet to diff against).
 
-**This is one-directional**: your edits flow to Kate. If Kate edits her
-copy, it gets overwritten on the next sync.
+**This is one-directional**: your edits flow to Kate. Items you remove from
+the source are removed from Kate's copy too. Items *she* removes come back
+on the next sync if they're still in the source; anything still present in
+both copies is left untouched, including her reordering. New items are
+appended to the end of her copy rather than inserted to match your order.
 
 ## 1. Get your Plex admin token (X-Plex-Token)
 
@@ -99,8 +105,11 @@ You should see a line like:
 ```
 Starting playlist sync: "Kate's favourites" -> Kate, every 24.0 hour(s).
 ...
-Synced "Kate's favourites" to Kate (12 item(s)).
+Synced "Kate's favourites" for Kate: removed 0, added 2 (14 item(s) total).
 ```
+
+(The first sync for a user instead logs `Created "Kate's favourites" for Kate
+(12 item(s)).` since there's no existing copy to diff against yet.)
 
 With multiple playlists and/or users configured, each playlist is synced to
 each user in turn within the same run.
@@ -114,9 +123,11 @@ means it comes back automatically after a host reboot too.
 - **Smart playlists** (the rule-based, auto-updating kind) are skipped —
   there's nothing fixed to copy. Convert it to a regular playlist first if
   you want it synced this way.
-- Kate's copy is a real, separate playlist under her account — she can
-  reorder or remove items locally, but any such changes are wiped out on the
-  next scheduled sync.
+- Kate's copy is a real, separate playlist under her account. Her reordering
+  and any items she keeps that are still in the source are left alone; only
+  the add/remove diff against the source is applied each sync.
+- New items land at the **end** of Kate's playlist, not necessarily in the
+  same position as in the source — reordering existing items is never done.
 - If a target username is mistyped, or the playlist name doesn't match
   exactly, the log will say so clearly — check `docker compose logs`.
 

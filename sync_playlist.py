@@ -8,8 +8,10 @@ with one or more Plex Home / managed users on the same server.
 Plex has no native "live sync" for playlists across Home users — the built-in
 Share option on a playlist only hands out a one-time, read-only snapshot that
 does NOT update when the original is edited. This script works around that by
-periodically deleting each target user's copy and recreating it from the
-current contents of the source playlist.
+periodically diffing each target user's copy against the current contents of
+the source playlist and adding/removing only what changed, in place (the
+first sync for a user creates the playlist from scratch, since there's
+nothing yet to diff against).
 
 Configuration is via environment variables (see .env.example):
   PLEX_URL             e.g. http://192.168.1.50:32400
@@ -24,8 +26,14 @@ Notes / limitations:
   * Smart playlists (rule-based, not a fixed item list) are skipped — there's
     nothing to "copy" since they're generated on the fly. Convert to a
     regular playlist first if you want it synced this way.
-  * This is one-directional: Nick's edits flow to Kate. If Kate edits her
-    copy, those edits are overwritten on the next sync run.
+  * This is one-directional: edits to the source playlist flow to each
+    target user. If a target user reorders or edits their copy, items that
+    are still present in the source are left alone (they're never re-added
+    or reordered), but anything they remove that's still in the source
+    playlist comes back on the next sync.
+  * New items are appended to the end of the target's playlist — the
+    existing order of items already in both playlists is never changed, so
+    a target playlist can drift out of the source's order over time.
   * Requires the SERVER ADMIN token, because switching into another user's
     context (switchUser) is an admin-only operation.
 """
@@ -103,6 +111,8 @@ def sync_once(url: str, token: str, playlist_name: str, target_users: list[str])
 
     log.info("Source playlist %r has %d item(s).", playlist_name, len(items))
 
+    source_keys = {item.ratingKey for item in items}
+
     for username in target_users:
         try:
             user_server = admin.switchUser(username)
@@ -115,21 +125,55 @@ def sync_once(url: str, token: str, playlist_name: str, target_users: list[str])
 
         try:
             existing = user_server.playlist(playlist_name)
-            existing.delete()
-            log.info("Removed %s's existing copy of %r before re-syncing.", username, playlist_name)
         except NotFound:
-            pass
+            existing = None
         except Exception as exc:  # noqa: BLE001
-            log.warning("Could not remove existing playlist for %s: %s", username, exc)
+            log.error("Could not look up %r for %s: %s", playlist_name, username, exc)
+            continue
+
+        if existing is None:
+            try:
+                # Re-fetch each item through the target user's own connection
+                # so the new playlist is created in that user's context.
+                user_items = [user_server.fetchItem(item.ratingKey) for item in items]
+                user_server.createPlaylist(playlist_name, items=user_items)
+                log.info("Created %r for %s (%d item(s)).", playlist_name, username, len(user_items))
+            except Exception as exc:  # noqa: BLE001
+                log.error("Failed to create playlist for %s: %s", username, exc)
+            continue
 
         try:
-            # Re-fetch each item through the target user's own connection so
-            # the new playlist is created in that user's context.
-            user_items = [user_server.fetchItem(item.ratingKey) for item in items]
-            user_server.createPlaylist(playlist_name, items=user_items)
-            log.info("Synced %r to %s (%d item(s)).", playlist_name, username, len(user_items))
+            existing_items = existing.items()
         except Exception as exc:  # noqa: BLE001
-            log.error("Failed to create playlist for %s: %s", username, exc)
+            log.error("Could not read %s's existing copy of %r: %s", username, playlist_name, exc)
+            continue
+
+        existing_keys = {item.ratingKey for item in existing_items}
+        to_remove = [item for item in existing_items if item.ratingKey not in source_keys]
+        keys_to_add = source_keys - existing_keys
+
+        if not to_remove and not keys_to_add:
+            log.info("%s's copy of %r is already up to date (%d item(s)).", username, playlist_name, len(existing_items))
+            continue
+
+        try:
+            if to_remove:
+                existing.removeItems(to_remove)
+            if keys_to_add:
+                # Re-fetch through the target user's own connection so the
+                # items can be attached to their playlist.
+                new_items = [user_server.fetchItem(key) for key in keys_to_add]
+                existing.addItems(new_items)
+            log.info(
+                "Synced %r for %s: removed %d, added %d (%d item(s) total).",
+                playlist_name,
+                username,
+                len(to_remove),
+                len(keys_to_add),
+                len(source_keys),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.error("Failed to update playlist for %s: %s", username, exc)
 
 
 def main() -> None:
